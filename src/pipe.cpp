@@ -245,9 +245,13 @@ bool zmq::pipe_t::check_write ()
         return false;
 
     const bool full = !check_hwm ();
-    fprintf (stdout, "zmq::pipe_t::check_write _out_active=%d, _state=%d, full=%d\n",
-             _out_active, _state, full);
-    fflush (stdout);
+    if (full == 1 || _out_active == 0) {
+        fprintf (
+          stdout,
+          "zmq::pipe_t::check_write _out_active=%d, _state=%d, full=%d\n",
+          _out_active, _state, full);
+        fflush (stdout);
+    }
 
     if (unlikely (full)) {
         _out_active = false;
@@ -261,8 +265,7 @@ bool zmq::pipe_t::write (const msg_t *msg_)
 {
     g_total_sent_msgs.fetch_add (1, std::memory_order_relaxed);
     if (unlikely (!check_write ())) {
-        fprintf (stdout,
-                 "zmq::pipe_t::write _out_active=%d, _state=%d\n",
+        fprintf (stdout, "zmq::pipe_t::write _out_active=%d, _state=%d\n",
                  _out_active, _state);
         fflush (stdout);
         return false;
