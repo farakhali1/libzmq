@@ -32,6 +32,7 @@
 #include "pipe.hpp"
 #include "err.hpp"
 #include "msg.hpp"
+#include <stdio.h>
 
 zmq::fq_t::fq_t () : _active (0), _last_in (NULL), _current (0), _more (false)
 {
@@ -52,6 +53,15 @@ void zmq::fq_t::attach (pipe_t *pipe_)
 void zmq::fq_t::pipe_terminated (pipe_t *pipe_)
 {
     const pipes_t::size_type index = _pipes.index (pipe_);
+
+    if (index == _current && _more) {
+        fprintf (
+          stderr,
+          "libzmq drop: reason=sub_fq_pipe_gone_mid_multipart active_before=%d "
+          "current=%zu\n",
+          static_cast<int> (_active), static_cast<size_t> (_current));
+        fflush (stderr);
+    }
 
     //  Remove the pipe from the list; adjust number of active pipes
     //  accordingly.

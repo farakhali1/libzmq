@@ -205,7 +205,8 @@ int zmq::xsub_t::xrecv (msg_t *msg_)
         //  Message doesn't match. Pop any remaining parts of the message
         //  from the pipe.
         fprintf (stderr,
-                 "zmq::xsub_t::xrecv libzmq drop: reason=sub_filter_no_match size=%zu more=%d\n",
+                 "libzmq drop: reason=sub_filter_no_match ctx=xrecv size=%zu "
+                 "more=%d\n",
                  msg_->size (), (msg_->flags () & msg_t::more) != 0 ? 1 : 0);
         fflush (stderr);
         while (msg_->flags () & msg_t::more) {
@@ -245,6 +246,13 @@ bool zmq::xsub_t::xhas_in ()
             return true;
         }
 
+        fprintf (stderr,
+                 "libzmq drop: reason=sub_filter_no_match ctx=xhas_in size=%zu "
+                 "more=%d\n",
+                 _message.size (),
+                 (_message.flags () & msg_t::more) != 0 ? 1 : 0);
+        fflush (stderr);
+
         //  Message doesn't match. Pop any remaining parts of the message
         //  from the pipe.
         while (_message.flags () & msg_t::more) {
@@ -280,8 +288,8 @@ void zmq::xsub_t::send_subscription (unsigned char *data_,
     //  zmq_setsockopt(ZMQ_SUBSCRIBE, ...), which also drops subscriptions
     //  when the SNDHWM is reached.
     if (!sent) {
-        fprintf (stderr, "zmq::xsub_t::send_subscription libzmq drop: reason=sub_subscription_hwm size=%zu\n",
-                 size_);
+        fprintf (stderr,
+                 "libzmq drop: reason=sub_subscription_hwm size=%zu\n", size_);
         fflush (stderr);
         msg.close ();
     }

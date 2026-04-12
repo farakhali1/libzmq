@@ -102,14 +102,6 @@ struct iovec
 #include <pgm/pgm.h>
 #endif
 
-#include <atomic>
-#include <stdio.h>
-
-namespace
-{
-std::atomic<unsigned long long> g_sendmsg_called (0);
-}
-
 //  Compile time check whether msg_t fits into zmq_msg_t.
 typedef char
   check_msg_t_size[sizeof (zmq::msg_t) == sizeof (zmq_msg_t) ? 1 : -1];
@@ -385,13 +377,6 @@ int zmq_disconnect (void *s_, const char *addr_)
 static inline int
 s_sendmsg (zmq::socket_base_t *s_, zmq_msg_t *msg_, int flags_)
 {
-    g_sendmsg_called.fetch_add (1, std::memory_order_relaxed);
-    const unsigned long long total_sent =
-      g_sendmsg_called.load (std::memory_order_relaxed);
-    if (total_sent % 500 == 0) {
-        fprintf (stdout, "static inline int s_sendmsg g_sendmsg_called=%d\n", total_sent);
-        fflush (stdout);
-    }
     size_t sz = zmq_msg_size (msg_);
     const int rc = s_->send (reinterpret_cast<zmq::msg_t *> (msg_), flags_);
     if (unlikely (rc < 0))
