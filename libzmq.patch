@@ -1,0 +1,374 @@
+diff --git a/src/dist.cpp b/src/dist.cpp
+index 7795bb36..46e9d121 100644
+--- a/src/dist.cpp
++++ b/src/dist.cpp
+@@ -33,6 +33,18 @@
+ #include "err.hpp"
+ #include "msg.hpp"
+ #include "likely.hpp"
++#include <stdio.h>
++
++void zmq_log_drop (const char *reason_,
++                   int matching_,
++                   int active_,
++                   int eligible_)
++{
++    fprintf (stderr,
++             "libzmq drop: reason=%s matching=%d active=%d eligible=%d\n",
++             reason_, matching_, active_, eligible_);
++    fflush (stderr);
++}
+ 
+ zmq::dist_t::dist_t () :
+     _matching (0),
+@@ -56,11 +68,16 @@ void zmq::dist_t::attach (pipe_t *pipe_)
+         _pipes.push_back (pipe_);
+         _pipes.swap (_eligible, _pipes.size () - 1);
+         _eligible++;
++        fprintf (stdout, "zmq::dist_t::attach in middle active pipe=%d\n",
++                 _active);
++        fflush (stdout);
+     } else {
+         _pipes.push_back (pipe_);
+         _pipes.swap (_active, _pipes.size () - 1);
+         _active++;
+         _eligible++;
++        fprintf (stdout, "zmq::dist_t::attach active pipe=%d\n", _active);
++        fflush (stdout);
+     }
+ }
+ 
+@@ -111,6 +128,9 @@ void zmq::dist_t::pipe_terminated (pipe_t *pipe_)
+     if (_pipes.index (pipe_) < _active) {
+         _pipes.swap (_pipes.index (pipe_), _active - 1);
+         _active--;
++        fprintf (stdout, "zmq::dist_t::pipe_terminated active pipe=%d\n",
++                 _active);
++        fflush (stdout);
+     }
+     if (_pipes.index (pipe_) < _eligible) {
+         _pipes.swap (_pipes.index (pipe_), _eligible - 1);
+@@ -133,6 +153,8 @@ void zmq::dist_t::activated (pipe_t *pipe_)
+     if (!_more && _active < _pipes.size ()) {
+         _pipes.swap (_eligible - 1, _active);
+         _active++;
++        fprintf (stdout, "zmq::dist_t::activated active pipe=%d\n", _active);
++        fflush (stdout);
+     }
+ }
+ 
+@@ -167,6 +189,11 @@ void zmq::dist_t::distribute (msg_t *msg_)
+         errno_assert (rc == 0);
+         rc = msg_->init ();
+         errno_assert (rc == 0);
++        fprintf (stdout,
++                 "zmq::dist_t::distribute no matching pipes available=%d\n",
++                 rc);
++        fflush (stdout);
++
+         return;
+     }
+ 
+@@ -180,6 +207,9 @@ void zmq::dist_t::distribute (msg_t *msg_)
+         }
+         int rc = msg_->init ();
+         errno_assert (rc == 0);
++        fprintf (stdout, "zmq::dist_t::distribute is_vsm=%d\n", rc);
++        fflush (stdout);
++
+         return;
+     }
+ 
+@@ -220,6 +250,8 @@ bool zmq::dist_t::write (pipe_t *pipe_, msg_t *msg_)
+         _active--;
+         _pipes.swap (_active, _eligible - 1);
+         _eligible--;
++        fprintf (stdout, " zmq::dist_t::write no pipe=%d\n", _active);
++        fflush (stdout);
+         return false;
+     }
+     if (!(msg_->flags () & msg_t::more))
+diff --git a/src/lb.cpp b/src/lb.cpp
+index e766b4f2..74933c3f 100644
+--- a/src/lb.cpp
++++ b/src/lb.cpp
+@@ -32,6 +32,17 @@
+ #include "pipe.hpp"
+ #include "err.hpp"
+ #include "msg.hpp"
++#include <stdio.h>
++
++namespace
++{
++void zmq_log_lb_drop (const char *reason_, int active_, int current_)
++{
++    fprintf (stderr, "libzmq drop: reason=%s active=%d current=%d\n", reason_,
++             active_, current_);
++    fflush (stderr);
++}
++}
+ 
+ zmq::lb_t::lb_t () : _active (0), _current (0), _more (false), _dropping (false)
+ {
+@@ -85,6 +96,8 @@ int zmq::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
+     //  Drop the message if required. If we are at the end of the message
+     //  switch back to non-dropping mode.
+     if (_dropping) {
++        zmq_log_lb_drop ("zmq::lb_t::sendpipe multipart_drop_mode", static_cast<int> (_active),
++                         static_cast<int> (_current));
+         _more = (msg_->flags () & msg_t::more) != 0;
+         _dropping = _more;
+ 
+@@ -123,6 +136,9 @@ int zmq::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
+             // immediately or after a short sleep in blocking mode.
+             _dropping = (msg_->flags () & msg_t::more) != 0;
+             _more = false;
++            zmq_log_lb_drop ("zmq::lb_t::sendpipe multipart_rollback_eagain",
++                             static_cast<int> (_active),
++                             static_cast<int> (_current));
+             errno = EAGAIN;
+             return -2;
+         }
+diff --git a/src/pipe.cpp b/src/pipe.cpp
+index b391b6ea..33148f4d 100644
+--- a/src/pipe.cpp
++++ b/src/pipe.cpp
+@@ -28,8 +28,10 @@
+ */
+ 
+ #include "precompiled.hpp"
++#include <atomic>
+ #include <new>
+ #include <stddef.h>
++#include <stdio.h>
+ 
+ #include "macros.hpp"
+ #include "pipe.hpp"
+@@ -38,6 +40,12 @@
+ #include "ypipe.hpp"
+ #include "ypipe_conflate.hpp"
+ 
++namespace
++{
++std::atomic<unsigned long long> g_total_sent_msgs (0);
++std::atomic<unsigned long long> g_total_hwm_drops (0);
++}
++
+ int zmq::pipepair (object_t *parents_[2],
+                    pipe_t *pipes_[2],
+                    const int hwms_[2],
+@@ -237,6 +245,9 @@ bool zmq::pipe_t::check_write ()
+         return false;
+ 
+     const bool full = !check_hwm ();
++    fprintf (stdout, "zmq::pipe_t::check_write _out_active=%d, _state=%d, full=%d\n",
++             _out_active, _state, full);
++    fflush (stdout);
+ 
+     if (unlikely (full)) {
+         _out_active = false;
+@@ -248,15 +259,21 @@ bool zmq::pipe_t::check_write ()
+ 
+ bool zmq::pipe_t::write (const msg_t *msg_)
+ {
+-    if (unlikely (!check_write ()))
++    g_total_sent_msgs.fetch_add (1, std::memory_order_relaxed);
++    if (unlikely (!check_write ())) {
++        fprintf (stdout,
++                 "zmq::pipe_t::write _out_active=%d, _state=%d\n",
++                 _out_active, _state);
++        fflush (stdout);
+         return false;
++    }
+ 
+     const bool more = (msg_->flags () & msg_t::more) != 0;
+     const bool is_routing_id = msg_->is_routing_id ();
+     _out_pipe->write (*msg_, more);
+-    if (!more && !is_routing_id)
++    if (!more && !is_routing_id) {
+         _msgs_written++;
+-
++    }
+     return true;
+ }
+ 
+@@ -549,18 +566,40 @@ void zmq::pipe_t::set_hwms (int inhwm_, int outhwm_)
+ 
+     _lwm = compute_lwm (in);
+     _hwm = out;
++    fprintf (stdout, "1-setsockopt, inhwm_=%d,outhwm_=%d \n", inhwm_, outhwm_);
++    fflush (stdout);
+ }
+ 
+ void zmq::pipe_t::set_hwms_boost (int inhwmboost_, int outhwmboost_)
+ {
+     _in_hwm_boost = inhwmboost_;
+     _out_hwm_boost = outhwmboost_;
++    fprintf (stdout, "2-setsockopt, _in_hwm_boost=%d,_out_hwm_boost=%d \n",
++             _in_hwm_boost, _out_hwm_boost);
++    fflush (stdout);
+ }
+ 
+ bool zmq::pipe_t::check_hwm () const
+ {
+     const bool full =
+       _hwm > 0 && _msgs_written - _peers_msgs_read >= uint64_t (_hwm);
++    // fprintf (stdout, "List HWM=%d\n", _hwm);
++    // fflush (stdout);
++    if (unlikely (full)) {
++        const unsigned long long total_hwm_drops =
++          g_total_hwm_drops.fetch_add (1, std::memory_order_relaxed) + 1;
++        const unsigned long long total_sent =
++          g_total_sent_msgs.load (std::memory_order_relaxed);
++        // if (total_sent % 100 == 0) {
++        fprintf (stderr,
++                 "libzmq drop: reason=hwm_full hwm=%d msgs_written=%llu "
++                 "peers_msgs_read=%llu total_sent=%llu total_hwm_drops=%llu\n",
++                 _hwm, static_cast<unsigned long long> (_msgs_written),
++                 static_cast<unsigned long long> (_peers_msgs_read), total_sent,
++                 total_hwm_drops);
++        fflush (stderr);
++        // }
++    }
+     return !full;
+ }
+ 
+diff --git a/src/socket_base.cpp b/src/socket_base.cpp
+index bbb378cc..102a3069 100644
+--- a/src/socket_base.cpp
++++ b/src/socket_base.cpp
+@@ -85,6 +85,7 @@
+ #include "pgm_socket.hpp"
+ #endif
+ 
++#include <stdio.h>
+ #include "pair.hpp"
+ #include "pub.hpp"
+ #include "sub.hpp"
+@@ -805,15 +806,15 @@ int zmq::socket_base_t::connect_internal (const char *endpoint_uri_)
+         // The total HWM for an inproc connection should be the sum of
+         // the binder's HWM and the connector's HWM.
+         const int sndhwm = peer.socket == NULL
+-                             ? options.sndhwm
+-                             : options.sndhwm != 0 && peer.options.rcvhwm != 0
+-                                 ? options.sndhwm + peer.options.rcvhwm
+-                                 : 0;
++                        ? options.sndhwm
++                           : options.sndhwm != 0 && peer.options.rcvhwm != 0
++                             ? options.sndhwm + peer.options.rcvhwm
++                             : 0;
+         const int rcvhwm = peer.socket == NULL
+-                             ? options.rcvhwm
+-                             : options.rcvhwm != 0 && peer.options.sndhwm != 0
+-                                 ? options.rcvhwm + peer.options.sndhwm
+-                                 : 0;
++                           ? options.rcvhwm
++                           : options.rcvhwm != 0 && peer.options.sndhwm != 0
++                             ? options.rcvhwm + peer.options.sndhwm
++                             : 0;
+ 
+         //  Create a bi-directional pipe to connect the peers.
+         object_t *parents[2] = {this, peer.socket == NULL ? this : peer.socket};
+@@ -1260,6 +1261,9 @@ int zmq::socket_base_t::send (msg_t *msg_, int flags_)
+     if (rc == 0) {
+         return 0;
+     }
++    fprintf (stdout, "zmq::socket_base_t::send reset_metadata=%d\n", rc);
++    fflush (stdout);
++
+     //  Special case for ZMQ_PUSH: -2 means pipe is dead while a
+     //  multi-part send is in progress and can't be recovered, so drop
+     //  silently when in blocking mode to keep backward compatibility.
+@@ -1602,6 +1606,9 @@ int zmq::socket_base_t::query_pipes_stats ()
+ 
+ void zmq::socket_base_t::update_pipe_options (int option_)
+ {
++    fprintf (stdout, "zmq::socket_base_t::update_pipe_options setsockopt HWM=%d, sndhwm=%d,rcvhwm=%d \n", option_,
++             options.sndhwm, options.rcvhwm);
++    fflush (stdout);
+     if (option_ == ZMQ_SNDHWM || option_ == ZMQ_RCVHWM) {
+         for (pipes_t::size_type i = 0, size = _pipes.size (); i != size; ++i) {
+             _pipes[i]->set_hwms (options.rcvhwm, options.sndhwm);
+diff --git a/src/xpub.cpp b/src/xpub.cpp
+index e806b8e4..13f20a3c 100644
+--- a/src/xpub.cpp
++++ b/src/xpub.cpp
+@@ -328,6 +328,10 @@ int zmq::xpub_t::xsend (msg_t *msg_)
+         }
+     } else
+         errno = EAGAIN;
++    if (rc == -1) {
++        fprintf (stdout, "zmq::xpub_t::xsend xsend=%d\n", rc);
++        fflush (stdout);
++    }
+     return rc;
+ }
+ 
+diff --git a/src/xsub.cpp b/src/xsub.cpp
+index 66c4d16b..025d283c 100644
+--- a/src/xsub.cpp
++++ b/src/xsub.cpp
+@@ -29,6 +29,7 @@
+ 
+ #include "precompiled.hpp"
+ #include <string.h>
++#include <stdio.h>
+ 
+ #include "macros.hpp"
+ #include "xsub.hpp"
+@@ -203,6 +204,10 @@ int zmq::xsub_t::xrecv (msg_t *msg_)
+ 
+         //  Message doesn't match. Pop any remaining parts of the message
+         //  from the pipe.
++        fprintf (stderr,
++                 "zmq::xsub_t::xrecv libzmq drop: reason=sub_filter_no_match size=%zu more=%d\n",
++                 msg_->size (), (msg_->flags () & msg_t::more) != 0 ? 1 : 0);
++        fflush (stderr);
+         while (msg_->flags () & msg_t::more) {
+             rc = _fq.recv (msg_);
+             errno_assert (rc == 0);
+@@ -274,6 +279,10 @@ void zmq::xsub_t::send_subscription (unsigned char *data_,
+     //  the subscription message instead. This matches the behaviour of
+     //  zmq_setsockopt(ZMQ_SUBSCRIBE, ...), which also drops subscriptions
+     //  when the SNDHWM is reached.
+-    if (!sent)
++    if (!sent) {
++        fprintf (stderr, "zmq::xsub_t::send_subscription libzmq drop: reason=sub_subscription_hwm size=%zu\n",
++                 size_);
++        fflush (stderr);
+         msg.close ();
++    }
+ }
+diff --git a/src/zmq.cpp b/src/zmq.cpp
+index 2c2e3d52..798e4742 100644
+--- a/src/zmq.cpp
++++ b/src/zmq.cpp
+@@ -102,6 +102,14 @@ struct iovec
+ #include <pgm/pgm.h>
+ #endif
+ 
++#include <atomic>
++#include <stdio.h>
++
++namespace
++{
++std::atomic<unsigned long long> g_sendmsg_called (0);
++}
++
+ //  Compile time check whether msg_t fits into zmq_msg_t.
+ typedef char
+   check_msg_t_size[sizeof (zmq::msg_t) == sizeof (zmq_msg_t) ? 1 : -1];
+@@ -377,6 +385,13 @@ int zmq_disconnect (void *s_, const char *addr_)
+ static inline int
+ s_sendmsg (zmq::socket_base_t *s_, zmq_msg_t *msg_, int flags_)
+ {
++    g_sendmsg_called.fetch_add (1, std::memory_order_relaxed);
++    const unsigned long long total_sent =
++      g_sendmsg_called.load (std::memory_order_relaxed);
++    if (total_sent % 500 == 0) {
++        fprintf (stdout, "static inline int s_sendmsg g_sendmsg_called=%d\n", total_sent);
++        fflush (stdout);
++    }
+     size_t sz = zmq_msg_size (msg_);
+     const int rc = s_->send (reinterpret_cast<zmq::msg_t *> (msg_), flags_);
+     if (unlikely (rc < 0))

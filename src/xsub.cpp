@@ -29,6 +29,7 @@
 
 #include "precompiled.hpp"
 #include <string.h>
+#include <stdio.h>
 
 #include "macros.hpp"
 #include "xsub.hpp"
@@ -203,6 +204,10 @@ int zmq::xsub_t::xrecv (msg_t *msg_)
 
         //  Message doesn't match. Pop any remaining parts of the message
         //  from the pipe.
+        fprintf (stderr,
+                 "zmq::xsub_t::xrecv libzmq drop: reason=sub_filter_no_match size=%zu more=%d\n",
+                 msg_->size (), (msg_->flags () & msg_t::more) != 0 ? 1 : 0);
+        fflush (stderr);
         while (msg_->flags () & msg_t::more) {
             rc = _fq.recv (msg_);
             errno_assert (rc == 0);
@@ -274,6 +279,10 @@ void zmq::xsub_t::send_subscription (unsigned char *data_,
     //  the subscription message instead. This matches the behaviour of
     //  zmq_setsockopt(ZMQ_SUBSCRIBE, ...), which also drops subscriptions
     //  when the SNDHWM is reached.
-    if (!sent)
+    if (!sent) {
+        fprintf (stderr, "zmq::xsub_t::send_subscription libzmq drop: reason=sub_subscription_hwm size=%zu\n",
+                 size_);
+        fflush (stderr);
         msg.close ();
+    }
 }

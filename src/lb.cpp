@@ -32,6 +32,17 @@
 #include "pipe.hpp"
 #include "err.hpp"
 #include "msg.hpp"
+#include <stdio.h>
+
+namespace
+{
+void zmq_log_lb_drop (const char *reason_, int active_, int current_)
+{
+    fprintf (stderr, "libzmq drop: reason=%s active=%d current=%d\n", reason_,
+             active_, current_);
+    fflush (stderr);
+}
+}
 
 zmq::lb_t::lb_t () : _active (0), _current (0), _more (false), _dropping (false)
 {
@@ -85,6 +96,8 @@ int zmq::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
     //  Drop the message if required. If we are at the end of the message
     //  switch back to non-dropping mode.
     if (_dropping) {
+        zmq_log_lb_drop ("zmq::lb_t::sendpipe multipart_drop_mode", static_cast<int> (_active),
+                         static_cast<int> (_current));
         _more = (msg_->flags () & msg_t::more) != 0;
         _dropping = _more;
 
@@ -123,6 +136,9 @@ int zmq::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
             // immediately or after a short sleep in blocking mode.
             _dropping = (msg_->flags () & msg_t::more) != 0;
             _more = false;
+            zmq_log_lb_drop ("zmq::lb_t::sendpipe multipart_rollback_eagain",
+                             static_cast<int> (_active),
+                             static_cast<int> (_current));
             errno = EAGAIN;
             return -2;
         }

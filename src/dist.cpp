@@ -33,6 +33,18 @@
 #include "err.hpp"
 #include "msg.hpp"
 #include "likely.hpp"
+#include <stdio.h>
+
+void zmq_log_drop (const char *reason_,
+                   int matching_,
+                   int active_,
+                   int eligible_)
+{
+    fprintf (stderr,
+             "libzmq drop: reason=%s matching=%d active=%d eligible=%d\n",
+             reason_, matching_, active_, eligible_);
+    fflush (stderr);
+}
 
 zmq::dist_t::dist_t () :
     _matching (0),
@@ -56,11 +68,16 @@ void zmq::dist_t::attach (pipe_t *pipe_)
         _pipes.push_back (pipe_);
         _pipes.swap (_eligible, _pipes.size () - 1);
         _eligible++;
+        fprintf (stdout, "zmq::dist_t::attach in middle active pipe=%d\n",
+                 _active);
+        fflush (stdout);
     } else {
         _pipes.push_back (pipe_);
         _pipes.swap (_active, _pipes.size () - 1);
         _active++;
         _eligible++;
+        fprintf (stdout, "zmq::dist_t::attach active pipe=%d\n", _active);
+        fflush (stdout);
     }
 }
 
@@ -111,6 +128,9 @@ void zmq::dist_t::pipe_terminated (pipe_t *pipe_)
     if (_pipes.index (pipe_) < _active) {
         _pipes.swap (_pipes.index (pipe_), _active - 1);
         _active--;
+        fprintf (stdout, "zmq::dist_t::pipe_terminated active pipe=%d\n",
+                 _active);
+        fflush (stdout);
     }
     if (_pipes.index (pipe_) < _eligible) {
         _pipes.swap (_pipes.index (pipe_), _eligible - 1);
@@ -133,6 +153,8 @@ void zmq::dist_t::activated (pipe_t *pipe_)
     if (!_more && _active < _pipes.size ()) {
         _pipes.swap (_eligible - 1, _active);
         _active++;
+        fprintf (stdout, "zmq::dist_t::activated active pipe=%d\n", _active);
+        fflush (stdout);
     }
 }
 
@@ -167,6 +189,11 @@ void zmq::dist_t::distribute (msg_t *msg_)
         errno_assert (rc == 0);
         rc = msg_->init ();
         errno_assert (rc == 0);
+        fprintf (stdout,
+                 "zmq::dist_t::distribute no matching pipes available=%d\n",
+                 rc);
+        fflush (stdout);
+
         return;
     }
 
@@ -180,6 +207,9 @@ void zmq::dist_t::distribute (msg_t *msg_)
         }
         int rc = msg_->init ();
         errno_assert (rc == 0);
+        fprintf (stdout, "zmq::dist_t::distribute is_vsm=%d\n", rc);
+        fflush (stdout);
+
         return;
     }
 
@@ -220,6 +250,8 @@ bool zmq::dist_t::write (pipe_t *pipe_, msg_t *msg_)
         _active--;
         _pipes.swap (_active, _eligible - 1);
         _eligible--;
+        fprintf (stdout, " zmq::dist_t::write no pipe=%d\n", _active);
+        fflush (stdout);
         return false;
     }
     if (!(msg_->flags () & msg_t::more))

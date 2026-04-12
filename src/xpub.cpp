@@ -328,6 +328,10 @@ int zmq::xpub_t::xsend (msg_t *msg_)
         }
     } else
         errno = EAGAIN;
+    if (rc == -1) {
+        fprintf (stdout, "zmq::xpub_t::xsend xsend=%d\n", rc);
+        fflush (stdout);
+    }
     return rc;
 }
 

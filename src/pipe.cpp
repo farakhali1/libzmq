@@ -28,8 +28,10 @@
 */
 
 #include "precompiled.hpp"
+#include <atomic>
 #include <new>
 #include <stddef.h>
+#include <stdio.h>
 
 #include "macros.hpp"
 #include "pipe.hpp"
@@ -37,6 +39,12 @@
 
 #include "ypipe.hpp"
 #include "ypipe_conflate.hpp"
+
+namespace
+{
+std::atomic<unsigned long long> g_total_sent_msgs (0);
+std::atomic<unsigned long long> g_total_hwm_drops (0);
+}
 
 int zmq::pipepair (object_t *parents_[2],
                    pipe_t *pipes_[2],
@@ -237,6 +245,9 @@ bool zmq::pipe_t::check_write ()
         return false;
 
     const bool full = !check_hwm ();
+    fprintf (stdout, "zmq::pipe_t::check_write _out_active=%d, _state=%d, full=%d\n",
+             _out_active, _state, full);
+    fflush (stdout);
 
     if (unlikely (full)) {
         _out_active = false;
@@ -248,15 +259,21 @@ bool zmq::pipe_t::check_write ()
 
 bool zmq::pipe_t::write (const msg_t *msg_)
 {
-    if (unlikely (!check_write ()))
+    g_total_sent_msgs.fetch_add (1, std::memory_order_relaxed);
+    if (unlikely (!check_write ())) {
+        fprintf (stdout,
+                 "zmq::pipe_t::write _out_active=%d, _state=%d\n",
+                 _out_active, _state);
+        fflush (stdout);
         return false;
+    }
 
     const bool more = (msg_->flags () & msg_t::more) != 0;
     const bool is_routing_id = msg_->is_routing_id ();
     _out_pipe->write (*msg_, more);
-    if (!more && !is_routing_id)
+    if (!more && !is_routing_id) {
         _msgs_written++;
-
+    }
     return true;
 }
 
@@ -549,18 +566,40 @@ void zmq::pipe_t::set_hwms (int inhwm_, int outhwm_)
 
     _lwm = compute_lwm (in);
     _hwm = out;
+    fprintf (stdout, "1-setsockopt, inhwm_=%d,outhwm_=%d \n", inhwm_, outhwm_);
+    fflush (stdout);
 }
 
 void zmq::pipe_t::set_hwms_boost (int inhwmboost_, int outhwmboost_)
 {
     _in_hwm_boost = inhwmboost_;
     _out_hwm_boost = outhwmboost_;
+    fprintf (stdout, "2-setsockopt, _in_hwm_boost=%d,_out_hwm_boost=%d \n",
+             _in_hwm_boost, _out_hwm_boost);
+    fflush (stdout);
 }
 
 bool zmq::pipe_t::check_hwm () const
 {
     const bool full =
       _hwm > 0 && _msgs_written - _peers_msgs_read >= uint64_t (_hwm);
+    // fprintf (stdout, "List HWM=%d\n", _hwm);
+    // fflush (stdout);
+    if (unlikely (full)) {
+        const unsigned long long total_hwm_drops =
+          g_total_hwm_drops.fetch_add (1, std::memory_order_relaxed) + 1;
+        const unsigned long long total_sent =
+          g_total_sent_msgs.load (std::memory_order_relaxed);
+        // if (total_sent % 100 == 0) {
+        fprintf (stderr,
+                 "libzmq drop: reason=hwm_full hwm=%d msgs_written=%llu "
+                 "peers_msgs_read=%llu total_sent=%llu total_hwm_drops=%llu\n",
+                 _hwm, static_cast<unsigned long long> (_msgs_written),
+                 static_cast<unsigned long long> (_peers_msgs_read), total_sent,
+                 total_hwm_drops);
+        fflush (stderr);
+        // }
+    }
     return !full;
 }
 

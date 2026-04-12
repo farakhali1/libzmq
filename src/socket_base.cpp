@@ -85,6 +85,7 @@
 #include "pgm_socket.hpp"
 #endif
 
+#include <stdio.h>
 #include "pair.hpp"
 #include "pub.hpp"
 #include "sub.hpp"
@@ -805,15 +806,15 @@ int zmq::socket_base_t::connect_internal (const char *endpoint_uri_)
         // The total HWM for an inproc connection should be the sum of
         // the binder's HWM and the connector's HWM.
         const int sndhwm = peer.socket == NULL
-                             ? options.sndhwm
-                             : options.sndhwm != 0 && peer.options.rcvhwm != 0
-                                 ? options.sndhwm + peer.options.rcvhwm
-                                 : 0;
+                        ? options.sndhwm
+                           : options.sndhwm != 0 && peer.options.rcvhwm != 0
+                             ? options.sndhwm + peer.options.rcvhwm
+                             : 0;
         const int rcvhwm = peer.socket == NULL
-                             ? options.rcvhwm
-                             : options.rcvhwm != 0 && peer.options.sndhwm != 0
-                                 ? options.rcvhwm + peer.options.sndhwm
-                                 : 0;
+                           ? options.rcvhwm
+                           : options.rcvhwm != 0 && peer.options.sndhwm != 0
+                             ? options.rcvhwm + peer.options.sndhwm
+                             : 0;
 
         //  Create a bi-directional pipe to connect the peers.
         object_t *parents[2] = {this, peer.socket == NULL ? this : peer.socket};
@@ -1260,6 +1261,9 @@ int zmq::socket_base_t::send (msg_t *msg_, int flags_)
     if (rc == 0) {
         return 0;
     }
+    fprintf (stdout, "zmq::socket_base_t::send reset_metadata=%d\n", rc);
+    fflush (stdout);
+
     //  Special case for ZMQ_PUSH: -2 means pipe is dead while a
     //  multi-part send is in progress and can't be recovered, so drop
     //  silently when in blocking mode to keep backward compatibility.
@@ -1602,6 +1606,9 @@ int zmq::socket_base_t::query_pipes_stats ()
 
 void zmq::socket_base_t::update_pipe_options (int option_)
 {
+    fprintf (stdout, "zmq::socket_base_t::update_pipe_options setsockopt HWM=%d, sndhwm=%d,rcvhwm=%d \n", option_,
+             options.sndhwm, options.rcvhwm);
+    fflush (stdout);
     if (option_ == ZMQ_SNDHWM || option_ == ZMQ_RCVHWM) {
         for (pipes_t::size_type i = 0, size = _pipes.size (); i != size; ++i) {
             _pipes[i]->set_hwms (options.rcvhwm, options.sndhwm);
